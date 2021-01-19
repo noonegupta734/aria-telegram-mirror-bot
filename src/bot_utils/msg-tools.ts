@@ -31,7 +31,7 @@ export function editMessage(bot: TelegramBot, msg: TelegramBot.Message, text: st
           reject(err);
         });
     } else {
-      resolve();
+      resolve('');
     }
   });
 }
@@ -57,6 +57,40 @@ export function sendMessage(bot: TelegramBot, msg: TelegramBot.Message, text: st
     .catch((err) => {
       console.error(`sendMessage error: ${err.message}`);
     });
+}
+
+export async function sendMessageAsync(bot: TelegramBot, msg: TelegramBot.Message, text: string, delay?: number, quickDeleteOriginal?: boolean, buttons?: [{ buttonName: string, url: string }]) {
+  if (!delay) delay = 10000;
+  return new Promise((resolve, reject) => {
+    let inlineKeyboard: TelegramBot.InlineKeyboardButton[] = [];
+    if (buttons && buttons.length > 0) {
+      buttons.forEach(button => {
+        inlineKeyboard.push({ text: button.buttonName, url: button.url });
+      });
+    }
+    bot.sendMessage(msg.chat.id, text, {
+      reply_to_message_id: msg.message_id,
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [inlineKeyboard]
+      }
+    })
+      .then((res) => {
+        if (delay > -1) {
+          deleteMsg(bot, res, delay);
+          if (quickDeleteOriginal) {
+            deleteMsg(bot, msg);
+          } else {
+            deleteMsg(bot, msg, delay);
+          }
+        }
+        resolve(res);
+      })
+      .catch((err) => {
+        console.error(`sendMessage error: ${err.message}`);
+        reject(err);
+      });
+  });
 }
 
 export function sendUnauthorizedMessage(bot: TelegramBot, msg: TelegramBot.Message): void {

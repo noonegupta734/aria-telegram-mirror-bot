@@ -2,6 +2,8 @@
 
 This is a Telegram bot that uses [aria2](https://github.com/aria2/aria2) to download files over BitTorrent / HTTP(S) and uploads them to your Google Drive. This can be useful for downloading from slow servers. Parallel downloading and download queuing are supported. There are some features to try to reduce piracy.
 
+## Support group
+Join https://t.me/aria2tg for any support related to this repo or just post in issues.
 ## Limitations
 
 This bot is meant to be used in small, closed groups. So, once deployed, it only works in whitelisted groups.
@@ -15,7 +17,10 @@ There is very little preventing users from using this to mirror pirated content.
 * `/mirror <url>` or `/m <url>`: Download from the given URL and upload it to Google Drive. <url> can be HTTP(S), a BitTorrent magnet, or a HTTP(S) url to a BitTorrent .torrent file. A status message will be shown and updated while downloading.
 * `/mirrorTar <url>` or `/mt <url>`: Same as `/mirror`, but archive multiple files into a tar before uploading it.
 * `/mirrorStatus` or `/ms`: Send a status message about all active and queued downloads.
-* `/cancelMirror` or `/cm`: Cancel a particular mirroring task. To use this, send it as a reply to the message that started the download that you want to cancel. Only the person who started the task, SUDO_USERS, and chat admins can use this command.
+* `/cancelMirror` or `/cm`: Cancel a particular mirroring task. Only the person who started the task, SUDO_USERS, and chat admins can use this command. It can be used in below two ways:
+
+      1. Send it as a reply to the message that started the download that you want to cancel.
+      2. Use the gid for each download, like `/cancelMirror <gid>` or `/cm <gid>`.
 * `/cancelAll` or `/ca`: Cancel all mirroring tasks in all chats if a [SUDO_USERS](#Constants-description) member uses it, or cancel all mirroring tasks for a particular chat if one of that chat's admins use it. No one else can use this command.
 * `/list <filename>` or `/l <filename>`: Send links to downloads with the `filename` substring in the name. In case of too many downloads, only show the most recent few. 
 * `/getfolder` or `/gf`: Send link of drive mirror folder.
@@ -33,6 +38,7 @@ There is very little preventing users from using this to mirror pirated content.
 
       Supported filetypes:
       .zip, .gz, .bz2, .tar, tar.gz, tar.bz2, .tgz, .tbz2
+* `/count <driveUrl>` or `/cnt <driveUrl>`: Obtain informations about a drive folder and send it as a table. Idea taken from: https://github.com/iwestlin/gd-utils/blob/master/count
 
 #### Notes
 
@@ -149,9 +155,16 @@ This is a description of the fields in src/.constants.js:
   * `ENABLED`: If `true`, all bot commands have to have the bot's username (as below) appended to them. For example, `/mirror https://someweb.site/resource.tar` will become `/mirror@botName_bot https://someweb.site/resource.tar`. The only exception to this is the `/list` command, which will not have the bot's name appended. This allows having multiple non-conflicting mirror bots in the same group, and have them all reply to `/list`.
   * `NAME`: The username of the bot, as given in BotFather. Include the leading "@".
 * `IS_TEAM_DRIVE`: Set to `true` if you are mirroring to a Shared Drive.
-* `USE_SERVICE_ACCOUNT_FOR_CLONE`: Set to `true` if you want to use Service Accounts to clone, this only works when IS_TEAM_DRIVE is true. Keep all the SAs in accounts folder.
+* `USE_SERVICE_ACCOUNT`: Set to `true` if you want to use Service Accounts to clone, this only works when IS_TEAM_DRIVE is true. Keep all the SAs in accounts folder.
    * TODO: Add script and instructions to generate SAs, for now follow: https://github.com/lzzy12/python-aria-mirror-bot#generating-service-accounts
 * `INDEX_DOMAIN`: Link for gdindex
+* `TELEGRAPH_TOKEN`: Telegraph token, if you want to show search results in telegra.ph else keep it blank. See [below](#Generating-Telegra.ph-token) for how to generate telegra.ph token.
+
+## Generating Telegra.ph token
+
+   ```bash
+   npm run generateTelegraphToken
+   ```
 
 ## Starting after installation
 

@@ -8,13 +8,17 @@ import dlm = require('./dl_model/dl-manager');
 import driveList = require('./drive/drive-list');
 import driveUtils = require('./drive/drive-utils');
 import driveDirectLink = require('./drive/drive-directLink');
-import cloneFn = require('./drive/drive-clone');
-import driveDownload = require('./drive/download-file');
+import cloneFn = require('./drive/drive-clone2');
+import driveDownload = require('./drive/drive-tar');
 import details = require('./dl_model/detail');
 import filenameUtils = require('./download_tools/filename-utils');
 import { EventRegex } from './bot_utils/event_regex';
-import { exec } from 'child_process';
+// import { exec } from 'child_process';
+import checkDiskSpace = require('check-disk-space');
+import gdUtils = require('./drive/gd-utils');
 
+const telegraph = require('telegraph-node')
+const ph = new telegraph();
 const eventRegex = new EventRegex();
 const bot = new TelegramBot(constants.TOKEN, { polling: true });
 var websocketOpened = false;
@@ -23,7 +27,7 @@ var dlManager = dlm.DlManager.getInstance();
 
 initAria2();
 
-if (constants.USE_SERVICE_ACCOUNT_FOR_CLONE && !constants.IS_TEAM_DRIVE) {
+if (constants.USE_SERVICE_ACCOUNT && !constants.IS_TEAM_DRIVE) {
   console.log('In order to use Service account for clone the drive should be Team drive. Please set IS_TEAM_DRIVE to true in .constants.js');
   process.exit();
 }
@@ -56,42 +60,60 @@ setEventCallback(eventRegex.commandsRegex.id, eventRegex.commandsRegexNoName.id,
   }
 });
 
-setEventCallback(eventRegex.commandsRegex.mirrorTar, eventRegex.commandsRegexNoName.mirrorTar, (msg, match) => {
+setEventCallback(eventRegex.commandsRegex.mirrorTar, eventRegex.commandsRegexNoName.mirrorTar, async (msg, match) => {
   if (msgTools.isAuthorized(msg) < 0) {
     msgTools.sendUnauthorizedMessage(bot, msg);
   } else {
-    mirror(msg, match, true);
-  }
-});
-
-setEventCallback(eventRegex.commandsRegex.mirror, eventRegex.commandsRegexNoName.mirror, (msg, match) => {
-  if (msgTools.isAuthorized(msg) < 0) {
-    msgTools.sendUnauthorizedMessage(bot, msg);
-  } else {
-    if (match[4] === "file" && msg.hasOwnProperty("reply_to_message") && msg.reply_to_message.hasOwnProperty("document") && msg.reply_to_message.document.hasOwnProperty("file_id")) {
-      bot.getFileLink(msg.reply_to_message.document.file_id).then((res) => {
-        match[4] = res;
-        mirror(msg, match);
-      }).catch(err => {
-        console.log("couldn't get file link: ", err.message);
-        msgTools.sendMessage(bot, msg, err.message, 60000);
-      });
-    } else {
-      mirror(msg, match);
+    try {
+      mirror(msg, await checkIfTorrentFile(msg, match), true);
+    } catch (error) {
+      console.log("Error in mirror: ", error.message);
+      msgTools.sendMessage(bot, msg, error.message, 60000);
     }
   }
 });
+
+setEventCallback(eventRegex.commandsRegex.mirror, eventRegex.commandsRegexNoName.mirror, async (msg, match) => {
+  if (msgTools.isAuthorized(msg) < 0) {
+    msgTools.sendUnauthorizedMessage(bot, msg);
+  } else {
+    try {
+      mirror(msg, await checkIfTorrentFile(msg, match));
+    } catch (error) {
+      console.log("Error in mirror: ", error.message);
+      msgTools.sendMessage(bot, msg, error.message, 60000);
+    }
+  }
+});
+
+async function checkIfTorrentFile(msg: TelegramBot.Message, match: RegExpExecArray) {
+  if (msg.hasOwnProperty("reply_to_message") && msg.reply_to_message.hasOwnProperty("document") && msg.reply_to_message.document.hasOwnProperty("file_id")) {
+    if (msg.reply_to_message.document.mime_type === 'application/x-bittorrent') {
+      match[4] = await bot.getFileLink(msg.reply_to_message.document.file_id);
+    } else {
+      throw new Error('Reply to a torrent file only for mirroring.');
+    }
+  }
+  return match;
+}
 
 setEventCallback(eventRegex.commandsRegex.disk, eventRegex.commandsRegexNoName.disk, (msg) => {
   if (msgTools.isAuthorized(msg) < 0) {
     msgTools.sendUnauthorizedMessage(bot, msg);
   } else {
-    exec(`df --output="size,used,avail" -h "${constants.ARIA_DOWNLOAD_LOCATION_ROOT}" | tail -n1`,
-      (err, res) => {
-        var disk = res.trim().split(/\s+/);
-        msgTools.sendMessage(bot, msg, `Total space: ${disk[0]}B\nUsed: ${disk[1]}B\nAvailable: ${disk[2]}B`);
-      }
-    );
+    // exec(`df --output="size,used,avail" -h "${constants.ARIA_DOWNLOAD_LOCATION_ROOT}" | tail -n1`,
+    //   (err, res) => {
+    //     var disk = res.trim().split(/\s+/);
+    //     msgTools.sendMessage(bot, msg, `Total space: ${disk[0]}B\nUsed: ${disk[1]}B\nAvailable: ${disk[2]}B`);
+    //   }
+    // );
+    checkDiskSpace(constants.ARIA_DOWNLOAD_LOCATION_ROOT).then(res => {
+      let used = res.size - res.free;
+      msgTools.sendMessage(bot, msg, `Total space: ${downloadUtils.formatSize(res.size)}\nUsed: ${downloadUtils.formatSize(used)}\nAvailable: ${downloadUtils.formatSize(res.free)}`);
+    }).catch(error => {
+      console.log('checkDiskSpace: ', error.message);
+      msgTools.sendMessage(bot, msg, `Error checking disk space: ${error.message}`);
+    });
   }
 });
 
@@ -132,7 +154,9 @@ setEventCallback(eventRegex.commandsRegex.unzipMirror, eventRegex.commandsRegexN
  * @param {boolean} isUnZip Decides if this download should be extracted before upload
  */
 function mirror(msg: TelegramBot.Message, match: RegExpExecArray, isTar?: boolean, isUnZip?: boolean): void {
+  if (match.length < 5 || !match[4]) return;
   if (websocketOpened) {
+    match[4] = match[4].trim();
     if (downloadUtils.isDownloadAllowed(match[4])) {
       prepDownload(msg, match[4], isTar, isUnZip);
     } else {
@@ -151,19 +175,47 @@ setEventCallback(eventRegex.commandsRegex.mirrorStatus, eventRegex.commandsRegex
   }
 });
 
-setEventCallback(eventRegex.commandsRegex.list, eventRegex.commandsRegexNoName.list, (msg, match) => {
+setEventCallback(eventRegex.commandsRegex.list, eventRegex.commandsRegexNoName.list, async (msg, match) => {
   if (msgTools.isAuthorized(msg) < 0) {
     msgTools.sendUnauthorizedMessage(bot, msg);
   } else {
-    driveList.listFiles(match[4], (err, res) => {
+    const searchingMsg = await bot.sendMessage(msg.chat.id, `🔍Searching for files.... Please wait.`, {
+      reply_to_message_id: msg.message_id,
+      parse_mode: 'HTML'
+    });
+    driveList.listFiles(match[4], async (err, res) => {
+      msgTools.deleteMsg(bot, searchingMsg);
       if (err) {
         msgTools.sendMessage(bot, msg, 'Failed to fetch the list of files');
       } else {
-        msgTools.sendMessage(bot, msg, res, 60000);
+        if (constants.TELEGRAPH_TOKEN) {
+          try {
+            if (res.length === 0) {
+              msgTools.sendMessage(bot, msg, 'There are no files matching your parameters');
+              return;
+            }
+            var g = JSON.stringify(res).replace(/[\[\]\,\"]/g, ''); //stringify and remove all "stringification" extra data
+            console.log('Size of telegraph node-->', g.length);
+            const telegraPhObj = await createTelegraphPage(res);
+            msgTools.sendMessageAsync(bot, msg, `Search results for ${match[4]} 👇🏼`, 60000, false, [{ buttonName: 'Here', url: telegraPhObj.url }]).catch(console.error);
+          } catch (error) {
+            msgTools.sendMessage(bot, msg, 'Failed to fetch the list of files, Telegra.ph error: ' + error);
+          }
+        } else {
+          msgTools.sendMessage(bot, msg, res.toString(), 60000);
+        }
       }
     });
   }
 });
+
+async function createTelegraphPage(content: any) {
+  return ph.createPage(constants.TELEGRAPH_TOKEN, 'Mirror Bot Search', content, {
+    return_content: true,
+    author_name: 'aria-telegram-mirror-bot',
+    author_url: 'https://github.com/arghyac35/aria-telegram-mirror-bot'
+  });
+}
 
 setEventCallback(eventRegex.commandsRegex.getFolder, eventRegex.commandsRegexNoName.getFolder, (msg) => {
   if (msgTools.isAuthorized(msg) < 0) {
@@ -175,30 +227,37 @@ setEventCallback(eventRegex.commandsRegex.getFolder, eventRegex.commandsRegexNoN
   }
 });
 
-setEventCallback(eventRegex.commandsRegex.cancelMirror, eventRegex.commandsRegexNoName.cancelMirror, (msg) => {
+setEventCallback(eventRegex.commandsRegex.cancelMirror, eventRegex.commandsRegexNoName.cancelMirror, (msg, match) => {
   var authorizedCode = msgTools.isAuthorized(msg);
+  var dlDetails: details.DlVars;
+  let gidFromMessage = '';
+
   if (msg.reply_to_message) {
-    var dlDetails = dlManager.getDownloadByMsgId(msg.reply_to_message);
-    if (dlDetails) {
-      if (authorizedCode > -1 && authorizedCode < 3) {
-        cancelMirror(dlDetails, msg);
-      } else if (authorizedCode === 3) {
-        msgTools.isAdmin(bot, msg, (e, res) => {
-          if (res) {
-            cancelMirror(dlDetails, msg);
-          } else {
-            msgTools.sendMessage(bot, msg, 'You do not have permission to do that.');
-          }
-        });
-      } else {
-        msgTools.sendUnauthorizedMessage(bot, msg);
-      }
+    dlDetails = dlManager.getDownloadByMsgId(msg.reply_to_message);
+  } else if (match && match.length > 5) {
+    gidFromMessage = match[4];
+    dlDetails = dlManager.getDownloadByGid(gidFromMessage.trim());
+  } else {
+    msgTools.sendMessage(bot, msg, `Reply to the command message for the download that you want to cancel or enter valid gid.`);
+  }
+
+  if (dlDetails) {
+    if (authorizedCode > -1 && authorizedCode < 3) {
+      cancelMirror(dlDetails, msg);
+    } else if (authorizedCode === 3) {
+      msgTools.isAdmin(bot, msg, (e, res) => {
+        if (res) {
+          cancelMirror(dlDetails, msg);
+        } else {
+          msgTools.sendMessage(bot, msg, 'You do not have permission to do that.');
+        }
+      });
     } else {
-      msgTools.sendMessage(bot, msg, `Reply to the command message for the download that you want to cancel.` +
-        ` Also make sure that the download is even active.`);
+      msgTools.sendUnauthorizedMessage(bot, msg);
     }
   } else {
-    msgTools.sendMessage(bot, msg, `Reply to the command message for the download that you want to cancel.`);
+    const message = gidFromMessage ? `Invalid GID, no download found with gid: <code>${gidFromMessage}</code>.` : `Reply to the command message for the download that you want to cancel. Also make sure that the download is even active.`;
+    msgTools.sendMessage(bot, msg, message);
   }
 });
 
@@ -254,6 +313,55 @@ setEventCallback(eventRegex.commandsRegex.tar, eventRegex.commandsRegexNoName.ta
   }
 });
 
+setEventCallback(eventRegex.commandsRegex.count, eventRegex.commandsRegexNoName.count, async (msg, match) => {
+  if (msgTools.isAuthorized(msg) < 0) {
+    msgTools.sendUnauthorizedMessage(bot, msg);
+  } else {
+    // get the drive filed id from url
+    const fileId = downloadUtils.getIdFromUrl(match[4]);
+    if (fileId) {
+      let countMsg = await bot.sendMessage(msg.chat.id, `Collecting info about ${fileId}，Please wait...`, {
+        reply_to_message_id: msg.message_id,
+        parse_mode: 'HTML'
+      });
+      const name = await gdUtils.get_folder_name(fileId);
+
+      const gen_text = (payload: any) => {
+        const { obj_count, processing_count, pending_count } = payload || {}
+        return `<b>Name:</b> ${name}\n<b>Number of Files:</b> ${obj_count || ''}\n${pending_count ? ('<b>Pending:</b> ' + pending_count) : ''}\n${processing_count ? ('<b>Ongoing:</b> ' + processing_count) : ''}`
+      }
+
+      const message_updater = async (payload: any) => await msgTools.editMessage(bot, countMsg, gen_text(payload));
+
+      try {
+        const table = await gdUtils.gen_count_body({ fid: fileId, tg: message_updater });
+        if (!table) {
+          msgTools.deleteMsg(bot, countMsg);
+          msgTools.sendMessage(bot, msg, `Failed to obtain info for: ${name}`, 10000);
+          return;
+        }
+
+        msgTools.deleteMsg(bot, countMsg);
+        msgTools.sendMessageAsync(bot, msg, `<b>Source Folder Name:</b> <code>${name}</code>\n<b>Source Folder Link:</b> <code>${match[4]}</code>\n<pre>${table}</pre>`, -1).catch(async err => {
+          if (err && err.body && err.body.error_code == 413 && err.body.description.includes('Entity Too Large')) {
+            const limit = 20
+            const table = await gdUtils.gen_count_body({ fid: fileId, limit });
+            msgTools.sendMessage(bot, msg, `<b>Source Folder Name:</b> <code>${name}</code>\n<b>Source Folder Link:</b> <code>${match[4]}</code>\nThe table is too long and exceeds the telegram message limit, only the first ${limit} will be displayed:\n<pre>${table}</pre>`, -1)
+          } else {
+            msgTools.sendMessage(bot, msg, err.message, 10000);
+          }
+        });
+      } catch (error) {
+        msgTools.deleteMsg(bot, countMsg);
+        msgTools.sendMessage(bot, msg, error.message, 10000);
+      }
+
+    } else {
+      msgTools.sendMessage(bot, msg, `Google drive ID could not be found in the provided link`);
+    }
+  }
+});
+
 /**
  * Start a clonning Google Drive files. Make sure that this is triggered by an
  * authorized user, because this function itself does not check for that.
@@ -262,7 +370,7 @@ setEventCallback(eventRegex.commandsRegex.tar, eventRegex.commandsRegexNoName.ta
  */
 async function clone(msg: TelegramBot.Message, match: RegExpExecArray) {
   // get the drive filed id from url
-  const fileId = getIdFromUrl(match[4]);
+  const fileId = downloadUtils.getIdFromUrl(match[4]);
   if (fileId) {
     let cloneMsg = await bot.sendMessage(msg.chat.id, `Cloning: <code>` + match[4] + `</code>`, {
       reply_to_message_id: msg.message_id,
@@ -278,28 +386,6 @@ async function clone(msg: TelegramBot.Message, match: RegExpExecArray) {
     });
   } else {
     msgTools.sendMessage(bot, msg, `Google drive ID could not be found in the provided link`);
-  }
-}
-
-function getIdFromUrl(url: string) {
-  var id: any = '';
-  if (url.includes('uc?id=')) {
-    const driveId = url.match(/[-\w]{25,}/);
-    const fileId: string = Array.isArray(driveId) && driveId.length > 0 ? driveId[0] : '';
-    if (fileId) {
-      return fileId;
-    }
-  }
-  var parts = url.split(/^(([^:\/?#]+):)?(\/\/([^\/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?/);
-  if (url.indexOf('?id=') >= 0) {
-    id = (parts[6].split("=")[1]).replace("&usp", "");
-    return id;
-  } else {
-    id = parts[5].split("/");
-    //Using sort to get the id as it is the longest element. 
-    var sortArr = id.sort((a: any, b: any) => { return b.length - a.length });
-    id = sortArr[0];
-    return id;
   }
 }
 
@@ -330,14 +416,8 @@ setEventCallback(eventRegex.commandsRegex.getLink, eventRegex.commandsRegexNoNam
     msgTools.sendUnauthorizedMessage(bot, msg);
   } else {
     if (constants.INDEX_DOMAIN) {
-      // driveDirectLink.getLink(match[2], false, (err, res) => {
-      //   if (err) {
-      //     msgTools.sendMessage(bot, msg, err, 6000);
-      //   } else {
-      //     msgTools.sendMessage(bot, msg, res, -1);
-      //   }
-      // });
-      await driveDirectLink.getGDindexLink(match[4], true).then((gdIndex: { url: string, name: string }) => {
+      const fileId = downloadUtils.getIdFromUrl(match[4]);
+      await driveDirectLink.getGDindexLink(fileId, true).then((gdIndex: { url: string, name: string }) => {
         let res = 'Direct Shareable Link: <a href = "' + gdIndex.url + '">' + gdIndex.name + '</a>';
         msgTools.sendMessage(bot, msg, res, 60000);
       }).catch((err: string) => {
@@ -346,6 +426,48 @@ setEventCallback(eventRegex.commandsRegex.getLink, eventRegex.commandsRegexNoNam
     } else {
       msgTools.sendMessage(bot, msg, 'GdIndex isn\'t configured.', 6000);
     }
+  }
+});
+
+setEventCallback(eventRegex.commandsRegex.help, eventRegex.commandsRegexNoName.help, async (msg, match) => {
+  if (msgTools.isAuthorized(msg) < 0) {
+    msgTools.sendUnauthorizedMessage(bot, msg);
+  } else {
+    const text = `
+    <b>Command ｜ Description</b>
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/mirror </code>url or <code>/m </code>url <b>|</b> Download from the given URL and upload it to Google Drive
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/mirrorTar </code>url or <code>/m </code>url <b>|</b> Same as <code>/mirror</code>, but archive multiple files into a tar before uploading it.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/mirrorStatus</code> or <code>/ms</code> <b>|</b> Send a status message about all active and queued downloads.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/cancelMirror</code> or <code>/cm</code> or <code>/cancelMirror </code>gid or <code>/cm </code>gid <b>|</b> Cancel a particular mirroring task. Send it as a reply to the message that started the download that you want to cancel or with gid.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/cancelAll</code> or <code>/ca</code> <b>|</b> Cancel all mirroring tasks in all chats if a SUDO_USERS member uses it, or cancel all mirroring tasks for a particular chat if one of that chat's admins use it. No one else can use this command.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/list </code>filename or <code>/l </code>filename <b>|</b> Send links to downloads with the filename substring in the name. In case of too many downloads, only show the most recent few.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/clone </code>driveUrl or <code>/c </code>driveUrl <b>|</b> Clone any shareable drive link.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/mf</code> or <code>/mirror file</code> <b>|</b> Forward any torrent file and reply to the forwared message with this command it will start mirroring the torrent.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/unzipMirror </code>url or <code>/um </code>url <b>|</b> Unzip the archive and uploads the unzipped folder. Supported filetypes: .zip, .gz, .bz2, .tar, tar.gz, tar.bz2, .tgz, .tbz2
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/count </code>driveUrl or <code>/cnt </code>driveUrl <b>|</b> Obtain informations about a drive folder and send it as a table.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/tar </code>driveUrl or <code>/t </code>driveUrl <b>|</b> Create a tar of drive folder and upload to drive.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/getlink </code>driveUrl or <code>/gl </code>driveUrl <b>|</b> Get the corresponding index link.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/getfolder</code> or <code>/gf</code> <b>|</b> Send link of drive mirror folder.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/disk</code> or <code>/d</code> <b>|</b> Send disk information of the machine.
+    ➖➖➖➖➖➖➖➖➖➖➖➖
+    <code>/help</code> or <code>/h</code> <b>|</b> You already know what it does.
+    ➖➖➖➖➖➖➖➖➖➖➖➖\n<i>Note: All the above command can also be called using dot(.) instead of slash(/). For e.x: <code>.mirror </code>url or <code>.m </code>url</i>
+    `
+    msgTools.sendMessage(bot, msg, text, 60000);
   }
 });
 
@@ -382,7 +504,7 @@ function sendCancelledMessages(): void {
 }
 
 function cancelMirror(dlDetails: details.DlVars, cancelMsg?: TelegramBot.Message): boolean {
-  if (dlDetails.isUploading) {
+  if (dlDetails.isUploading || dlDetails.isExtracting) {
     if (cancelMsg) {
       msgTools.sendMessage(bot, cancelMsg, 'Upload in progress. Cannot cancel.');
     }
@@ -426,7 +548,7 @@ function handleDisallowedFilename(dlDetails: details.DlVars, filename: string): 
     var isAllowed = filenameUtils.isFilenameAllowed(filename);
     if (isAllowed === 0) {
       dlDetails.isDownloadAllowed = 0;
-      if (!dlDetails.isUploading) {
+      if (!dlDetails.isUploading || !dlDetails.isExtracting) {
         cancelMirror(dlDetails);
       }
       return false;
@@ -467,7 +589,7 @@ function sendStatusMessage(msg: TelegramBot.Message, keepForever?: boolean): Pro
     dlManager.deleteStatus(msg.chat.id);
   }
 
-  return new Promise(resolve => {
+  return new Promise<void>(resolve => {
     downloadUtils.getStatusMessage()
       .then(res => {
         if (keepForever) {
@@ -635,7 +757,7 @@ function ariaOnDownloadComplete(gid: string, retry: number): void {
       }
 
       if (file) {
-        ariaTools.getFileSize(gid, (err, size) => {
+        ariaTools.getFileSize(gid, async (err, size) => {
           if (err) {
             console.error(`onDownloadComplete: Error getting file size for ${gid}. ${err}`);
             var message = 'Upload failed. Could not get file size.';
@@ -644,10 +766,24 @@ function ariaOnDownloadComplete(gid: string, retry: number): void {
           }
 
           var filename = filenameUtils.getFileNameFromPath(file, null);
-          dlDetails.isUploading = true;
           if (handleDisallowedFilename(dlDetails, filename)) {
+            let isUnzip = false;
+            if (dlDetails.isUnzip) {
+              try {
+                isUnzip = true;
+                const extractDetails = await ariaTools.extractFile(dlDetails, file, size);
+                file = extractDetails.filePath;
+                filename = extractDetails.filename;
+                size = extractDetails.size; //TODO: To check if size is null
+              } catch (error) {
+                console.error(error);
+                cleanupDownload(gid, error.message);
+                return;
+              }
+            }
+            dlDetails.isUploading = true;
             console.log(`${gid}: Completed. Filename: ${filename}. Starting upload.`);
-            ariaTools.uploadFile(dlDetails, file, size, driveUploadCompleteCallback);
+            ariaTools.uploadFile(dlDetails, file, size, isUnzip, driveUploadCompleteCallback);
           } else {
             var reason = 'Upload failed. Blacklisted file name.';
             console.log(`${gid}: Blacklisted. Filename: ${filename}.`);

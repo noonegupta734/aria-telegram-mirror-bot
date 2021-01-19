@@ -132,7 +132,7 @@ export function getStatusMessage(): Promise<StatusAll> {
  * @returns {StatusMessage} An object containing a printable status message and the file name
  */
 export function generateStatusMessage(totalLength: number, completedLength: number, speed: number,
-  files: any[], isUploading: boolean): StatusMessage {
+  files: any[], seeders: string, peers: string, dlDetails: details.DlVars): StatusMessage {
   var filePath = filenameUtils.findAriaFilePath(files);
   var fileName = filenameUtils.getFileNameFromPath(filePath.path, filePath.inputPath, filePath.downloadUri);
   var progress;
@@ -141,12 +141,21 @@ export function generateStatusMessage(totalLength: number, completedLength: numb
   } else {
     progress = Math.round(completedLength * 100 / totalLength);
   }
+  if (dlDetails && dlDetails.extractedFileName) {
+    fileName = dlDetails.extractedFileName;
+  }
   var totalLengthStr = formatSize(totalLength);
   var progressString = generateProgress(progress);
   var speedStr = formatSize(speed);
   var eta = downloadETA(totalLength, completedLength, speed);
-  var type = isUploading ? 'Uploading' : 'Filename';
+  var type = dlDetails.isUploading ? 'Uploading' : 'Filename';
   var message = `<b>${type}</b>: <code>${fileName}</code>\n<b>Size</b>: <code>${totalLengthStr}</code>\n<b>Progress</b>: <code>${progressString}</code>\n<b>Speed</b>: <code>${speedStr}ps</code>\n<b>ETA</b>: <code>${eta}</code>`;
+  if (seeders || peers) {
+    message += `\n<b>Seeders</b>: <code>${seeders || 0}</code> | <b>Peers</b>: <code>${peers || 0}</code>`;
+  }
+  if (!dlDetails.isUploading) {
+    message += `\n<b>GID</b>: <code>${dlDetails.gid}</code>`;
+  }
   var status = {
     message: message,
     filename: fileName,
@@ -217,4 +226,28 @@ export function isDownloadAllowed(url: string): boolean {
     if (url.indexOf(constants.ARIA_FILTERED_DOMAINS[i]) > -1) return false;
   }
   return true;
+}
+
+export function getIdFromUrl(url: string) {
+  var id: any = '';
+  if (url.includes('uc?id=')) {
+    const driveId = url.match(/[-\w]{25,}/);
+    const fileId: string = Array.isArray(driveId) && driveId.length > 0 ? driveId[0] : '';
+    return fileId;
+  }
+  var parts = url.split(/^(([^:\/?#]+):)?(\/\/([^\/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?/);
+  if (url.indexOf('?id=') >= 0) {
+    id = (parts[6].split("=")[1]).replace("&usp", "");
+    return id;
+  } else {
+    id = parts[5].split("/");
+    //Using sort to get the id as it is the longest element. 
+    var sortArr = id.sort((a: any, b: any) => { return b.length - a.length });
+    id = sortArr[0];
+    return id;
+  }
+}
+
+export function checkTrailingSlash(str: string) {
+  return str += str.endsWith("/") ? "" : "/";
 }
