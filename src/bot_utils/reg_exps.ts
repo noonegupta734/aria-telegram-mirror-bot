@@ -7,7 +7,7 @@ export class RegExps {
   readonly getFolder: RegExp;
   readonly cancelMirror: RegExp;
   readonly cancelAll: RegExp;
-  readonly disk: RegExp;
+  readonly stats: RegExp;
   readonly getLink: RegExp;
   readonly clone: RegExp;
   readonly id: RegExp;
@@ -16,6 +16,8 @@ export class RegExps {
   readonly unzipMirror: RegExp;
   readonly count: RegExp;
   readonly help: RegExp;
+  readonly authorize: RegExp;
+  readonly unauthorize: RegExp;
 
   constructor(commands: string[]) {
     this.start = new RegExp(commands[0], 'i');
@@ -26,7 +28,7 @@ export class RegExps {
     this.getFolder = new RegExp(commands[5], 'i');
     this.cancelMirror = new RegExp(commands[6], 'i');
     this.cancelAll = new RegExp(commands[7], 'i');
-    this.disk = new RegExp(commands[8], 'i');
+    this.stats = new RegExp(commands[8], 'i');
     this.getLink = new RegExp(commands[9], 'i');
     this.clone = new RegExp(commands[10], 'i');
     this.id = new RegExp(commands[11], 'i');
@@ -35,5 +37,7 @@ export class RegExps {
     this.unzipMirror = new RegExp(commands[14], 'i');
     this.count = new RegExp(commands[15], 'i');
     this.help = new RegExp(commands[16], 'i');
+    this.authorize = new RegExp(commands[17], 'i');
+    this.unauthorize = new RegExp(commands[18], 'i');
   }
 }

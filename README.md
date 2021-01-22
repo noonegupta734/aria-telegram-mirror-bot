@@ -8,6 +8,10 @@ Join https://t.me/aria2tg for any support related to this repo or just post in i
 
 This bot is meant to be used in small, closed groups. So, once deployed, it only works in whitelisted groups.
 
+## Heroku
+
+Follow the heroku [guide](heroku_guide.md) for deployment in heroku
+
 ## Warning
 
 There is very little preventing users from using this to mirror pirated content. Hence, make sure that only trusted groups are whitelisted in `AUTHORIZED_CHATS`.
@@ -24,7 +28,7 @@ There is very little preventing users from using this to mirror pirated content.
 * `/cancelAll` or `/ca`: Cancel all mirroring tasks in all chats if a [SUDO_USERS](#Constants-description) member uses it, or cancel all mirroring tasks for a particular chat if one of that chat's admins use it. No one else can use this command.
 * `/list <filename>` or `/l <filename>`: Send links to downloads with the `filename` substring in the name. In case of too many downloads, only show the most recent few. 
 * `/getfolder` or `/gf`: Send link of drive mirror folder.
-* `/disk`: Send disk information of the machine.
+* `/stats`: Send disk information, cpu load of the machine & bot uptime.
 * `/getlink <driveUrl>` or `/gl <driveUrl>`: Send index link of the file.
 * `/clone <driveUrl>` or `/c <diveUrl>`: Clone any shareable drive link. ~~(TODO: Add service account in it so that if 750GB per account limit is over we can switch to service account.)~~
 * `/mirror file` or `/mf`: Forward any torrent file and reply to the forwared message with this command it will start mirroring the torrent.
@@ -39,6 +43,8 @@ There is very little preventing users from using this to mirror pirated content.
       Supported filetypes:
       .zip, .gz, .bz2, .tar, tar.gz, tar.bz2, .tgz, .tbz2
 * `/count <driveUrl>` or `/cnt <driveUrl>`: Obtain informations about a drive folder and send it as a table. Idea taken from: https://github.com/iwestlin/gd-utils/blob/master/count
+* `/authorize` or `/a`: To authorize a chat, only run by SUDO_USERS. As this is stored in a file, so might get reset at every restart(not sure tho). To make it sustain need to use a db like redis which I may implement later.
+* `/unauthorize` or `/ua`: To unauthorize a chat, only run by SUDO_USERS
 
 #### Notes
 
@@ -107,7 +113,7 @@ Aria-telegram-mirror-bot is now written in TypeScript. If you are migrating from
    * Visit the [Google Cloud Console](https://console.developers.google.com/apis/credentials)
    * Go to the OAuth Consent tab, fill it, and save.
    * Go to the Credentials tab and click Create Credentials -> OAuth Client ID
-   * Choose Other and Create.
+   * Choose Desktop App and Create.
    * Use the download button to download your credentials.
    * Move that file to the root of aria-telegram-mirror-bot, and rename it to `client_secret.json`
 

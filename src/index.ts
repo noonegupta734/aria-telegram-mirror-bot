@@ -13,9 +13,9 @@ import driveDownload = require('./drive/drive-tar');
 import details = require('./dl_model/detail');
 import filenameUtils = require('./download_tools/filename-utils');
 import { EventRegex } from './bot_utils/event_regex';
-// import { exec } from 'child_process';
 import checkDiskSpace = require('check-disk-space');
 import gdUtils = require('./drive/gd-utils');
+import { readFile, writeFile } from 'fs-extra';
 
 const telegraph = require('telegraph-node')
 const ph = new telegraph();
@@ -97,23 +97,89 @@ async function checkIfTorrentFile(msg: TelegramBot.Message, match: RegExpExecArr
   return match;
 }
 
-setEventCallback(eventRegex.commandsRegex.disk, eventRegex.commandsRegexNoName.disk, (msg) => {
+setEventCallback(eventRegex.commandsRegex.stats, eventRegex.commandsRegexNoName.stats, async (msg) => {
   if (msgTools.isAuthorized(msg) < 0) {
     msgTools.sendUnauthorizedMessage(bot, msg);
   } else {
-    // exec(`df --output="size,used,avail" -h "${constants.ARIA_DOWNLOAD_LOCATION_ROOT}" | tail -n1`,
-    //   (err, res) => {
-    //     var disk = res.trim().split(/\s+/);
-    //     msgTools.sendMessage(bot, msg, `Total space: ${disk[0]}B\nUsed: ${disk[1]}B\nAvailable: ${disk[2]}B`);
-    //   }
-    // );
-    checkDiskSpace(constants.ARIA_DOWNLOAD_LOCATION_ROOT).then(res => {
-      let used = res.size - res.free;
-      msgTools.sendMessage(bot, msg, `Total space: ${downloadUtils.formatSize(res.size)}\nUsed: ${downloadUtils.formatSize(used)}\nAvailable: ${downloadUtils.formatSize(res.free)}`);
-    }).catch(error => {
-      console.log('checkDiskSpace: ', error.message);
-      msgTools.sendMessage(bot, msg, `Error checking disk space: ${error.message}`);
-    });
+    try {
+      const diskSpace = await checkDiskSpace(constants.ARIA_DOWNLOAD_LOCATION_ROOT);
+      const avgCpuLoad = await downloadUtils.getCPULoadAVG();
+      const botUptime = downloadUtils.getProcessUptime()
+
+      const usedDiskSpace = diskSpace.size - diskSpace.free;
+
+      msgTools.sendMessage(bot, msg, `Total space: ${downloadUtils.formatSize(diskSpace.size)}\nUsed: ${downloadUtils.formatSize(usedDiskSpace)}\nAvailable: ${downloadUtils.formatSize(diskSpace.free)}\nCPU Load: ${avgCpuLoad}\nBot Uptime: ${botUptime}`);
+    } catch (error) {
+      console.log('stats: ', error.message);
+      msgTools.sendMessage(bot, msg, `Error checking stats: ${error.message}`);
+    }
+  }
+});
+
+setEventCallback(eventRegex.commandsRegex.authorize, eventRegex.commandsRegexNoName.authorize, async (msg) => {
+  if (msgTools.isAuthorized(msg) !== 0) {
+    msgTools.sendMessage(bot, msg, `This command is only for SUDO_USERS`);
+  } else {
+    try {
+      let alreadyAuthorizedChats: any = await readFile('./authorizedChats.json', 'utf8').catch(async err => {
+        if (err.code === 'ENOENT') {
+          // create authorizedChats.json
+          await writeFile('./authorizedChats.json', JSON.stringify([]));
+        } else {
+          throw new Error(err);
+        }
+      });
+      if (alreadyAuthorizedChats) {
+        alreadyAuthorizedChats = JSON.parse(alreadyAuthorizedChats);
+      } else {
+        alreadyAuthorizedChats = [];
+      }
+      const allAuthorizedChats: number[] = constants.AUTHORIZED_CHATS.concat(alreadyAuthorizedChats, constants.SUDO_USERS);
+      if (allAuthorizedChats.includes(msg.chat.id)) {
+        msgTools.sendMessage(bot, msg, `Chat already authorized.`);
+      } else {
+        alreadyAuthorizedChats.push(msg.chat.id);
+        await writeFile('./authorizedChats.json', JSON.stringify(alreadyAuthorizedChats)).then(() => {
+          msgTools.sendMessage(bot, msg, `Chat authorized successfully.`, -1);
+        });
+      }
+    } catch (error) {
+      console.log('authorize: ', error.message);
+      msgTools.sendMessage(bot, msg, `Error authorizing: ${error.message}`);
+    }
+  }
+});
+
+setEventCallback(eventRegex.commandsRegex.unauthorize, eventRegex.commandsRegexNoName.unauthorize, async (msg) => {
+  if (msgTools.isAuthorized(msg) !== 0) {
+    msgTools.sendMessage(bot, msg, `This command is only for SUDO_USERS`);
+  } else {
+    try {
+      let alreadyAuthorizedChats: any = await readFile('./authorizedChats.json', 'utf8').catch(err => {
+        if (err.code === 'ENOENT') {
+          return '';
+        } else {
+          throw new Error(err);
+        }
+      });
+      if (alreadyAuthorizedChats) {
+        alreadyAuthorizedChats = JSON.parse(alreadyAuthorizedChats);
+        const index = alreadyAuthorizedChats.indexOf(msg.chat.id);
+        if (index > -1) {
+          alreadyAuthorizedChats.splice(index, 1);
+          await writeFile('./authorizedChats.json', JSON.stringify(alreadyAuthorizedChats)).then(() => {
+            msgTools.sendMessage(bot, msg, `Chat unauthorized successfully.`, -1);
+          });
+        } else {
+          msgTools.sendMessage(bot, msg, `Cannot unauthorize this chat. Please make sure this chat was authorized using /authorize command only.`);
+        }
+      } else {
+        msgTools.sendMessage(bot, msg, `No authorized chats found. Please make use this chat was authorized using /authorize command only.`);
+      }
+    } catch (error) {
+      console.log('unauthorize: ', error.message);
+      msgTools.sendMessage(bot, msg, `Error unauthorizing: ${error.message}`);
+    }
   }
 });
 
@@ -331,10 +397,11 @@ setEventCallback(eventRegex.commandsRegex.count, eventRegex.commandsRegexNoName.
         return `<b>Name:</b> ${name}\n<b>Number of Files:</b> ${obj_count || ''}\n${pending_count ? ('<b>Pending:</b> ' + pending_count) : ''}\n${processing_count ? ('<b>Ongoing:</b> ' + processing_count) : ''}`
       }
 
-      const message_updater = async (payload: any) => await msgTools.editMessage(bot, countMsg, gen_text(payload));
+      const message_updater = async (payload: any) => await msgTools.editMessage(bot, countMsg, gen_text(payload)).catch(err => console.error(err.message));
 
       try {
-        const table = await gdUtils.gen_count_body({ fid: fileId, tg: message_updater });
+        let countResult = await gdUtils.gen_count_body({ fid: fileId, tg: message_updater });
+        let table = countResult.table;
         if (!table) {
           msgTools.deleteMsg(bot, countMsg);
           msgTools.sendMessage(bot, msg, `Failed to obtain info for: ${name}`, 10000);
@@ -343,9 +410,10 @@ setEventCallback(eventRegex.commandsRegex.count, eventRegex.commandsRegexNoName.
 
         msgTools.deleteMsg(bot, countMsg);
         msgTools.sendMessageAsync(bot, msg, `<b>Source Folder Name:</b> <code>${name}</code>\n<b>Source Folder Link:</b> <code>${match[4]}</code>\n<pre>${table}</pre>`, -1).catch(async err => {
-          if (err && err.body && err.body.error_code == 413 && err.body.description.includes('Entity Too Large')) {
+          if (err && ((err.body && err.body.error_code == 413 && err.body.description.includes('Entity Too Large')) || (err.response && err.response.body && err.response.body.error_code == 400 && err.response.body.description.includes('message is too long')))) {
             const limit = 20
-            const table = await gdUtils.gen_count_body({ fid: fileId, limit });
+            countResult = await gdUtils.gen_count_body({ fid: fileId, limit, smy: countResult.smy });
+            table = countResult.table;
             msgTools.sendMessage(bot, msg, `<b>Source Folder Name:</b> <code>${name}</code>\n<b>Source Folder Link:</b> <code>${match[4]}</code>\nThe table is too long and exceeds the telegram message limit, only the first ${limit} will be displayed:\n<pre>${table}</pre>`, -1)
           } else {
             msgTools.sendMessage(bot, msg, err.message, 10000);
@@ -462,7 +530,7 @@ setEventCallback(eventRegex.commandsRegex.help, eventRegex.commandsRegexNoName.h
     ➖➖➖➖➖➖➖➖➖➖➖➖
     <code>/getfolder</code> or <code>/gf</code> <b>|</b> Send link of drive mirror folder.
     ➖➖➖➖➖➖➖➖➖➖➖➖
-    <code>/disk</code> or <code>/d</code> <b>|</b> Send disk information of the machine.
+    <code>/stats</code> <b>|</b> Send disk information, cpu load of the machine & bot uptime.
     ➖➖➖➖➖➖➖➖➖➖➖➖
     <code>/help</code> or <code>/h</code> <b>|</b> You already know what it does.
     ➖➖➖➖➖➖➖➖➖➖➖➖\n<i>Note: All the above command can also be called using dot(.) instead of slash(/). For e.x: <code>.mirror </code>url or <code>.m </code>url</i>

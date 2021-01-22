@@ -4,6 +4,7 @@ import ariaTools = require('../download_tools/aria-tools');
 import TelegramBot = require('node-telegram-bot-api');
 import details = require('../dl_model/detail');
 import dlm = require('../dl_model/dl-manager');
+import { readFileSync } from 'fs-extra';
 var dlManager = dlm.DlManager.getInstance();
 
 export async function deleteMsg(bot: TelegramBot, msg: TelegramBot.Message, delay?: number): Promise<any> {
@@ -116,9 +117,24 @@ export function isAuthorized(msg: TelegramBot.Message, skipDlOwner?: boolean): n
     var dlDetails = dlManager.getDownloadByMsgId(msg.reply_to_message);
     if (dlDetails && msg.from.id === dlDetails.tgFromId) return 1;
   }
-  if (constants.AUTHORIZED_CHATS.indexOf(msg.chat.id) > -1 &&
+
+  // Read the authorizedChats.json and concat the value of AUTHORIZED_CHATS from .constants.js and continue with the check
+  let alreadyAuthorizedChats: any = '';
+  try {
+    alreadyAuthorizedChats = readFileSync('./authorizedChats.json', 'utf8');
+  } catch (error) {
+    alreadyAuthorizedChats = ''; // if there is error while reading the file then just pass null so that the check doesn't fail
+  }
+  if (alreadyAuthorizedChats) {
+    alreadyAuthorizedChats = JSON.parse(alreadyAuthorizedChats);
+  } else {
+    alreadyAuthorizedChats = [];
+  }
+  alreadyAuthorizedChats = alreadyAuthorizedChats.concat(constants.AUTHORIZED_CHATS);
+
+  if (alreadyAuthorizedChats.indexOf(msg.chat.id) > -1 &&
     msg.chat.all_members_are_administrators) return 2;
-  if (constants.AUTHORIZED_CHATS.indexOf(msg.chat.id) > -1) return 3;
+  if (alreadyAuthorizedChats.indexOf(msg.chat.id) > -1) return 3;
   return -1;
 }
 
